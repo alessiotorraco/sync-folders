@@ -1,25 +1,4 @@
-#https://github.com/alessiotorraco/sync-folders
-#MIT License
-
-#Copyright (c) 2021 Alessio Torraco
-
-#Permission is hereby granted, free of charge, to any person obtaining a copy
-#of this software and associated documentation files (the "Software"), to deal
-#in the Software without restriction, including without limitation the rights
-#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#copies of the Software, and to permit persons to whom the Software is
-#furnished to do so, subject to the following conditions:
-
-#The above copyright notice and this permission notice shall be included in all
-#copies or substantial portions of the Software.
-
-#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-#SOFTWARE.
+# MIT LICENSE @ ALESSIO TORRACO 2021
 
 # Get file MD5 hash
 function Get-FileMD5 {
@@ -57,6 +36,10 @@ Function Get-ChildItemToDepth {
                 Get-ChildItemToDepth -Path $_.FullName -Filter $Filter `
                   -ToDepth $ToDepth -CurrentDepth $CurrentDepth
             }
+            #Else {
+            #    Write-Debug $("Skipping GCI for Folder: $($_.FullName) " + `
+            #      "(Why: Current depth $CurrentDepth vs limit depth $ToDepth)")
+            #}
         }
     }
 }
@@ -122,6 +105,7 @@ function showSummary() {
     }
 }
 
+# One-way sync files (SRC <- DST)
 # PULL
 function pull {
     Param(
@@ -130,7 +114,8 @@ function pull {
         [ValidateNotNullOrEmpty()]
         [string]$DST_DIR=$(throw "Destination directory is mandatory, please provide a value."),
         $AUTO = $true,
-        $VERBOSE = $false
+        $VERBOSE = $false,
+        $SKIP_EAR = $true
     )
     $sourceFiles = $null
     foreach ($filter in $Filter) {
@@ -139,70 +124,78 @@ function pull {
     $SourceFiles | % { # loop through the source dir files
         $src = $_.FullName #current source dir file
         $wdsrc = [datetime]$_.LastWriteTime
-        if ($VERBOSE -eq $true) {
-            Write-Host -ForegroundColor Yellow "SLW: " -NoNewLine; Write-Host $wdsrc -NoNewLine; Write-Host -ForegroundColor Red " SFN: " -NoNewLine; Write-Host $src
-        }
-        $dest = $src -replace $SRC_DIR.Replace('\','\\'),$DST_DIR
-        if (test-path $dest) { #if file exists, check md5 hash
-            $wddst = [datetime](Get-ItemProperty -Path $dest -Name LastWriteTime).lastwritetime
+        $extn = [IO.Path]::GetExtension($src)
+        if ($extn -eq ".ear" -And $SKIP_EAR -eq $true)
+        {
+            # Skip *.ear files
+        } else {
             if ($VERBOSE -eq $true) {
-                Write-Host -ForegroundColor Yellow "DLW: " -NoNewLine; Write-Host $wddst -NoNewLine; Write-Host -ForegroundColor Red " DFN: " -NoNewLine; Write-Host $dest
+                Write-Host -ForegroundColor Yellow "SLW: " -NoNewLine; Write-Host $wdsrc -NoNewLine; Write-Host -ForegroundColor Red " SFN: " -NoNewLine; Write-Host $src
             }
-            if ((get-date $wdsrc) -gt (get-date $wddst)) {
-                $newer += $src
-                $srcMD5 = Get-FileMD5 -file $src
+            $dest = $src -replace $SRC_DIR.Replace('\','\\'),$DST_DIR
+            if (test-path $dest) { #if file exists, check md5 hash
+                $wddst = [datetime](Get-ItemProperty -Path $dest -Name LastWriteTime).lastwritetime
                 if ($VERBOSE -eq $true) {
-                    Write-Host -ForegroundColor Red "                         SFH: " -NoNewLine; Write-Host $srcMD5
+                    Write-Host -ForegroundColor Yellow "DLW: " -NoNewLine; Write-Host $wddst -NoNewLine; Write-Host -ForegroundColor Red " DFN: " -NoNewLine; Write-Host $dest
                 }
-                $destMD5 = Get-FileMD5 -file $dest
-                if ($VERBOSE -eq $true) {
-                    Write-Host -ForegroundColor Red "                         DFH: " -NoNewLine; Write-Host $destMD5
-                }
-                if ($srcMD5 -eq $destMD5) { #Check md5 hash match.
+                if ((get-date $wdsrc) -gt (get-date $wddst)) {
+                    $newer += $src
+                    $srcMD5 = Get-FileMD5 -file $src
                     if ($VERBOSE -eq $true) {
-                        Write-Host -ForegroundColor Yellow "                              File hashes match. File already exists in destination folder and will be skipped.`n"
+                        Write-Host -ForegroundColor Red "                         SFH: " -NoNewLine; Write-Host $srcMD5
                     }
-                    $notUpdated += $src
+                    $destMD5 = Get-FileMD5 -file $dest
+                    if ($VERBOSE -eq $true) {
+                        Write-Host -ForegroundColor Red "                         DFH: " -NoNewLine; Write-Host $destMD5
+                    }
+                    if ($srcMD5 -eq $destMD5) { #Check md5 hash match.
+                        if ($VERBOSE -eq $true) {
+                            Write-Host -ForegroundColor Yellow "                              File hashes match. File already exists in destination folder and will be skipped.`n"
+                        }
+                        $notUpdated += $src
+                        $cpy = $false
+                    }
+                    else { #if MD5 hashes do not match, overwrite
+                        $cpy = $true
+                        if ($VERBOSE -eq $true) {
+                            Write-Host -ForegroundColor Yellow "                              File hashes don't match. File will be copied to destination folder.`n"
+                        }
+                    }
+                } else {
                     $cpy = $false
                 }
-                else { #if MD5 hashes do not match, overwrite
-                    $cpy = $true
+            }
+            else { 
+                #New files
+                #Write-Debug "File doesn't exist in destination folder and will be copied."
+                $cpy = $true
+            }
+            #Write-Debug "Copy is $cpy"
+            if ($cpy -eq $true) { #Copy the file if file version is newer or if it doesn't exist in the destination dir.
+                #Write-Debug "Copying $src to $dest"
+                if (!(test-path $dest)) {
+                    $created += $dest
                     if ($VERBOSE -eq $true) {
-                        Write-Host -ForegroundColor Yellow "                              File hashes don't match. File will be copied to destination folder.`n"
+                        Write-Host -ForegroundColor DarkCyan "                         DFN: " -NoNewLine; Write-Host $dest
                     }
+                    $null = New-Item -ItemType "File" -Path $dest -Force
                 }
-            } else {
-                $cpy = $false
-            }
-        }
-        else { 
-            #New files
-            $cpy = $true
-        }
-        if ($cpy -eq $true) { 
-            #Copy the file if file version is newer or if it doesn't exist in the destination dir.
-            if (!(test-path $dest)) {
-                $created += $dest
-                if ($VERBOSE -eq $true) {
-                    Write-Host -ForegroundColor DarkCyan "                         DFN: " -NoNewLine; Write-Host $dest
-                }
-                $null = New-Item -ItemType "File" -Path $dest -Force
-            }
-            # Update already existing file
-            if ($AUTO -eq $true) {
-                if ($dest -notin $created) {
-                    $updated += $src
-                }
-                Copy-Item -Path $src -Destination $dest -Force
-            } else {
-                $choice = Read-Host "Press any key to continue or [c] to cancel.`n"
-                if ($choice -ne "c") {
+            # update already existing file
+                if ($AUTO -eq $true) {
                     if ($dest -notin $created) {
                         $updated += $src
                     }
                     Copy-Item -Path $src -Destination $dest -Force
                 } else {
-                    $cancelled += $src
+                    $choice = Read-Host "Press any key to continue or [c] to cancel.`n"
+                    if ($choice -ne "c") {
+                        if ($dest -notin $created) {
+                            $updated += $src
+                        }
+                        Copy-Item -Path $src -Destination $dest -Force
+                    } else {
+                        $cancelled += $src
+                    }
                 }
             }
         }
@@ -268,10 +261,12 @@ function push {
         }
         else { 
             #New files
+            #Write-Debug "File doesn't exist in destination folder and will be copied."
             $cpy = $true
         }
-        if ($cpy -eq $true) { 
-            #Copy the file if file version is newer or if it doesn't exist in the destination dir.
+        #Write-Debug "Copy is $cpy"
+        if ($cpy -eq $true) { #Copy the file if file version is newer or if it doesn't exist in the destination dir.
+            #Write-Debug "Copying $src to $dest"
             if (!(test-path $dest)) {
                 $created += $dest
                 if ($VERBOSE -eq $true) {
@@ -279,7 +274,7 @@ function push {
                 }
                 $null = New-Item -ItemType "File" -Path $dest -Force
             }
-            # Update already existing file
+            # update already existing file
             if ($AUTO -eq $true) {
                 if ($dest -notin $created) {
                     $updated += $src
@@ -302,6 +297,46 @@ function push {
         Write-Host
     }
     return $newer, $updated, $notUpdated, $created, $cancelled
+}
+
+function moveToHistoryFolder {
+    Param(
+        [ValidateNotNullOrEmpty()]
+        [string]$SRC_DIR=$(throw "Source directory is mandatory, please provide a value.")
+    )
+    $moved = @()
+    $SourceFiles = $null
+    $SourceFiles = Get-ChildItemToDepth -ToDepth 2 -Path $SRC_DIR -Filter "*.ear"
+    $latest = $null
+    #Write-Host "LATEST: $latest"
+    $SourceFiles | % { # loop through the source dir files
+        $src = $_.FullName #current source dir file
+        $srcDir = [System.IO.Path]::GetDirectoryName($src)
+        $latest = (Get-ChildItem -Path $srcDir -Filter *.ear | sort LastWriteTime | Select -Last 1).FullName
+        #Write-Host $srcDir
+        #Write-Host $latest
+        if ($src -eq $latest) {
+            #Write-Host "$src EQ $latest"
+        } else {
+            $destName = $_.Name
+            $dest = $srcDir+"\Stable\"
+            #Write-Host "Move-Item -Path $src -Destination $dest -Force"
+            if (!(test-path $dest)) {
+                $null = New-Item -ItemType Directory -Path $dest -Force
+            }
+            $dest += $destName
+            Move-Item -Path $src -Destination $dest -Force
+            $moved += $dest
+            Write-Host -ForegroundColor Red "Moved $dest"
+        }
+    }
+    if ($moved.count -gt 0) {
+        Write-Host -ForegroundColor Cyan "Moved file(s):"
+        foreach ($item in $moved) {
+            Write-Host $item
+        }
+        Write-Host
+    }
 }
 
 #CHECK INPUT
@@ -330,8 +365,10 @@ if ($input -eq "pull" -Or $input -eq "push") {
     #PUSH
     else {
         Write-Host -ForegroundColor DarkRed "`nPUSH " -NoNewLine; Write-Host -ForegroundColor Yellow "[$DST_DIR]`n"
-        $newer, $updated, $notUpdated, $created, $cancelled = push $SRC_DIR $DST_DIR -AUTO $false
+        $newer, $updated, $notUpdated, $created, $cancelled = push $SRC_DIR $DST_DIR -VERBOSE $false
         showSummary "push"
+        # Move older *.ear files to history folder except for latest one
+        moveToHistoryFolder $DST_DIR
     }
 } else {
     Write-Host -ForegroundColor Red "Error: Input parameters not existing or invalid."
